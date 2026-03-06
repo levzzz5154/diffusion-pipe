@@ -1,0 +1,49 @@
+# Example config for training a Canny control LoRA on the Anima model.
+# Control images (e.g., Canny edge maps) are concatenated with noisy latents
+# as an extra temporal frame (Flux2-style). The model architecture is unchanged —
+# the 3D RoPE encodes (t=0,h,w) for image vs (t=1,h,w) for control, so the
+# transformer's self-attention learns to condition on the control signal via LoRA.
+
+output_dir = '/home/levzzz/Documents/software/diffusion-pipe/outputs'
+dataset = 'examples/anima_canny_dataset.toml'
+
+epochs = 15
+micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 100
+pipeline_stages = 1
+activation_checkpointing = true
+
+save_every_n_epochs = 1
+checkpoint_every_n_minutes = 120
+
+[model]
+type = 'anima'
+transformer_path = '/home/levzzz/ComfyUI/models/diffusion_models/anima-preview.safetensors'
+vae_path = '/home/levzzz/ComfyUI/models/vae/qwen_image_vae.safetensors'
+llm_path = '/home/levzzz/ComfyUI/models/text_encoders/qwen_3_06b_base.safetensors'
+dtype = 'bfloat16'
+# Freeze the LLM adapter — the LoRA on the transformer is sufficient for control.
+llm_adapter_lr = 0
+
+[adapter]
+type = 'lora'
+rank = 32
+dropout = 0.0
+dtype = 'bfloat16'
+
+# [optimizer]
+# type = 'adamw_optimi'
+# lr = 1e-5
+# betas = [0.9, 0.99]
+# weight_decay = 0.01
+
+[optimizer]
+# AdamW from the optimi library is a good default since it automatically uses Kahan summation when training bfloat16 weights.
+# Look at train.py for other options. You could also easily edit the file and add your own.
+type = 'adamw_optimi'
+lr = 2e-5
+betas = [0.9, 0.99]
+weight_decay = 0.01
+eps = 1e-8

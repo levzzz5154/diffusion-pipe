@@ -1,0 +1,23 @@
+# Dataset config for Anima Canny control LoRA training.
+# Each training image needs:
+#   - A target image in 'path'
+#   - A corresponding Canny edge map in 'control_path' (same filename stem)
+#   - A caption in a .txt file with the same name as the image
+
+# Base resolution in pixels. Use a scalar for area-based sizing with AR buckets.
+resolutions = [768]
+
+# Enable aspect ratio bucketing. For the different AR buckets, the final size will be such that
+# the areas match the resolutions you configured above.
+enable_ar_bucket = true
+
+# Min and max aspect ratios, given as width/height ratio.
+min_ar = 0.5
+max_ar = 2.0
+# Total number of aspect ratio buckets, evenly spaced (in log space) between min_ar and max_ar.
+num_ar_buckets = 9
+
+[[directory]]
+path = '/home/levzzz/Desktop/Grabber-anima/'
+caption_ext = '.txt'
+control_path = '/home/levzzz/Desktop/Grabber-anima-canny/'

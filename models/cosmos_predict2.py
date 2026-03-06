@@ -331,11 +331,22 @@ class CosmosPredict2Pipeline(BasePipeline):
         )
 
     def get_call_vae_fn(self, vae):
-        def fn(tensor):
+        def fn(*args):
             p = next(vae.parameters())
-            tensor = tensor.to(p.device, p.dtype)
-            latents = vae_encode(tensor, self.vae)
-            return {'latents': latents}
+            if len(args) == 1:
+                tensor = args[0]
+                tensor = tensor.to(p.device, p.dtype)
+                latents = vae_encode(tensor, self.vae)
+                return {'latents': latents}
+            elif len(args) == 2:
+                tensor, control_tensor = args
+                tensor = tensor.to(p.device, p.dtype)
+                control_tensor = control_tensor.to(p.device, p.dtype)
+                latents = vae_encode(tensor, self.vae)
+                control_latents = vae_encode(control_tensor, self.vae)
+                return {'latents': latents, 'control_latents': control_latents}
+            else:
+                raise RuntimeError(f'Unexpected number of args: {len(args)}')
         return fn
 
     def get_call_text_encoder_fn(self, text_encoder):
@@ -403,6 +414,13 @@ class CosmosPredict2Pipeline(BasePipeline):
         noisy_latents = (1 - t_expanded)*latents + t_expanded*noise
         target = noise - latents
         t = t.view(-1, 1)
+
+        if 'control_latents' in inputs:
+            control_latents = inputs['control_latents'].float()
+            # Concatenate along temporal dim (T) so control becomes frame 1.
+            # 3D RoPE encodes (t=0,h,w) for image vs (t=1,h,w) for control,
+            # analogous to Flux2's img_ids index dimension.
+            noisy_latents = torch.cat([noisy_latents, control_latents], dim=2)
 
         return (noisy_latents, t, *prompt_embeds_or_batch_encoding), (target, mask)
 
@@ -494,6 +512,8 @@ class CosmosPredict2Pipeline(BasePipeline):
             with torch.autocast('cuda', enabled=False):
                 output = output.to(torch.float32)
                 target = target.to(output.device, torch.float32)
+                if output.shape[2] != target.shape[2]:
+                    output = output[:, :, :target.shape[2], :, :]
                 if 'pseudo_huber_c' in self.config:
                     c = self.config['pseudo_huber_c']
                     loss = torch.sqrt((output-target)**2 + c**2) - c
