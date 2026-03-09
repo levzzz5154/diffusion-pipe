@@ -1,0 +1,14 @@
+# Dataset config for Anima distillation LoRA training.
+# Points to a directory of .safetensors files saved by the
+# SaveDistillationData ComfyUI node. Each file contains:
+#   - "noise"  tensor  (starting noise from teacher generation)
+#   - "latent" tensor  (clean output from teacher model, 80 NFE, CFG 4)
+#   - metadata: "positive_prompt", "negative_prompt"
+
+# Enable distillation mode. This tells diffusion-pipe to load pre-saved
+# teacher outputs instead of raw images.
+distillation = true
+
+[[directory]]
+path = '/home/levzzz/Documents/distilldata/'
+num_repeats = 1

@@ -409,7 +409,7 @@ class CosmosPredict2Pipeline(BasePipeline):
             mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
             t = time_shift(mu, 1.0, t)
 
-        noise = torch.randn_like(latents)
+        noise = inputs['noise'].float() if 'noise' in inputs else torch.randn_like(latents)
         t_expanded = t.view(-1, 1, 1, 1, 1)
         noisy_latents = (1 - t_expanded)*latents + t_expanded*noise
         target = noise - latents
