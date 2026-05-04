@@ -5,6 +5,7 @@ import time
 import sys
 
 import torch
+import safetensors.torch
 from deepspeed import comm as dist
 from deepspeed.utils.logging import logger
 
@@ -70,8 +71,8 @@ class Saver:
                     if not hasattr(p, 'original_name'):
                         logger.warning(f'WARNING: parameter {name} requires_grad but does not have original_name. Not saving it.')
                         continue
-                    # TODO: maybe this needs to change if we ever have non-lora adapters?
-                    partial_state_dict[p.original_name.replace('.default', '').replace('.modules_to_save', '')] = p.detach()
+                    cleaned_name = p.original_name.replace('.default', '').replace('.modules_to_save', '')
+                    partial_state_dict[cleaned_name] = p.detach()
                     if 'save_dtype' in self.config:
                         convert_state_dict_dtype(partial_state_dict, self.config['save_dtype'])
             torch.save(partial_state_dict, tmp_dir / f'state_dict_{stage_id}.bin')
@@ -80,7 +81,12 @@ class Saver:
             state_dict = {}
             for path in tmp_dir.glob('*.bin'):
                 state_dict.update(torch.load(path, weights_only=True, map_location='cpu'))
-            self.model.save_adapter(save_dir, state_dict)
+            is_lycoris = any('hada_' in k or 'lokr_' in k for k in state_dict)
+            if is_lycoris:
+                sd = {'diffusion_model.' + k: v for k, v in state_dict.items()}
+                safetensors.torch.save_file(sd, save_dir / 'adapter_model.safetensors', metadata={'format': 'pt'})
+            else:
+                self.model.save_adapter(save_dir, state_dict)
             shutil.copy(self.args.config, save_dir)
             shutil.rmtree(tmp_dir)
 

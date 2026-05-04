@@ -1,0 +1,18 @@
+# LoHA (Hadamard Product Low-Rank Adaptation) adapter example.
+# Uses the Hadamard (element-wise) product of two low-rank matrices:
+#   ΔW = (W1a @ W1b) ⊙ (W2a @ W2b)
+# This allows rank ≤ dim², enabling high expressivity at small ranks.
+# Recommended rank: 4-32, alpha: rank/2 ~ rank
+#
+# For full training config, see examples/main_example.toml
+
+[adapter]
+type = 'loha'
+rank = 8
+# alpha controls the scaling of the adapter output. Unlike LoRA, LyCORIS allows custom alpha.
+# Defaults to rank if not specified. Recommended: 1 to half of rank.
+alpha = 4
+dtype = 'bfloat16'
+dropout = 0.0
+# Optional: initialize from a previously trained adapter.
+#init_from_existing = '/path/to/previous/epoch50'

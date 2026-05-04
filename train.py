@@ -117,7 +117,7 @@ def set_config_defaults(config):
     if 'adapter' in config:
         adapter_config = config['adapter']
         adapter_type = adapter_config['type']
-        if adapter_config['type'] == 'lora':
+        if adapter_type == 'lora':
             if 'alpha' in adapter_config:
                 raise NotImplementedError(
                     'This script forces alpha=rank to make the saved LoRA format simpler and more predictable with downstream inference programs. Please remove alpha from the config.'
@@ -126,6 +126,14 @@ def set_config_defaults(config):
             adapter_config.setdefault('dropout', 0.0)
             adapter_config.setdefault('dtype', model_dtype_str)
             adapter_config['dtype'] = DTYPE_MAP[adapter_config['dtype']]
+        elif adapter_type in ('loha', 'lokr'):
+            if 'alpha' not in adapter_config:
+                adapter_config['alpha'] = adapter_config['rank']
+            adapter_config.setdefault('dropout', 0.0)
+            adapter_config.setdefault('dtype', model_dtype_str)
+            adapter_config['dtype'] = DTYPE_MAP[adapter_config['dtype']]
+            if adapter_type == 'lokr':
+                adapter_config.setdefault('factor', -1)
         else:
             raise NotImplementedError(f'Adapter type {adapter_type} is not implemented')
 
@@ -776,7 +784,7 @@ if __name__ == '__main__':
 
     # Might be useful because we set things in fp16 / bf16 without explicitly enabling Deepspeed fp16 mode.
     # Unsure if really needed.
-    communication_data_type = config['lora']['dtype'] if 'lora' in config else config['model']['dtype']
+    communication_data_type = config['adapter']['dtype'] if 'adapter' in config else config['model']['dtype']
     model_engine.communication_data_type = communication_data_type
 
     train_dataloader = dataset_util.PipelineDataLoader(train_data, model_engine, model_engine.gradient_accumulation_steps(), model)
