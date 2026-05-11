@@ -22,7 +22,10 @@ from utils.lycoris_adapter import configure_lycoris, build_lycoris_name_map, is_
 import comfy.utils
 import comfy.sd
 import comfy.sd1_clip
+from comfy.sd1_clip import SD1Tokenizer
 from comfy import model_management
+# Avoids using comfy_kitchen RoPE implementations that don't have backward defined
+model_management.in_training = True
 
 
 def make_contiguous(*tensors):
@@ -287,9 +290,10 @@ class BasePipeline:
             with torch.autocast('cuda', enabled=False):
                 output = output.to(torch.float32)
                 target = target.to(output.device, torch.float32)
-                if 'pseudo_huber_c' in self.config:
-                    c = self.config['pseudo_huber_c']
-                    loss = torch.sqrt((output-target)**2 + c**2) - c
+                if 'huber_delta' in self.config:
+                    loss = F.huber_loss(output, target, reduction='none', delta=self.config['huber_delta'])
+                elif 'smooth_l1_beta' in self.config:
+                    loss = F.smooth_l1_loss(output, target, reduction='none', beta=self.config['smooth_l1_beta'])
                 else:
                     loss = F.mse_loss(output, target, reduction='none')
                 # empty tensor means no masking
@@ -383,6 +387,11 @@ class ModelWrapper:
             self._model = self._load_fn()
 
 
+def tokenize(text_encoder, text):
+    # to make sure we force disable_weights=True even if the child class doesn't set it
+    return SD1Tokenizer.tokenize_with_weights(text_encoder.tokenizer, text, disable_weights=True)
+
+
 class ComfyPipeline:
     framerate = None
     pixels_round_to_multiple = 16
@@ -432,7 +441,7 @@ class ComfyPipeline:
             clip_type = getattr(comfy.sd.CLIPType, te_config['type'].upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
 
             def load_fn():
-                return comfy.sd.load_clip(ckpt_paths=paths, clip_type=clip_type)
+                return comfy.sd.load_clip(ckpt_paths=paths, clip_type=clip_type, disable_dynamic=True)
 
             self.text_encoders.append(ModelWrapper(load_fn))
 
@@ -581,7 +590,7 @@ class ComfyPipeline:
 
             max_length = 0
             for text in captions:
-                tokens = text_encoder.tokenize(text)
+                tokens = tokenize(text_encoder, text)
                 # tokens looks like {'qwen3_4b': [[(0, 1.0), (1, 1.0), (2, 1.0)]]}
                 for v in tokens.values():
                     max_length = max(max_length, len(v[0]))
@@ -590,7 +599,7 @@ class ComfyPipeline:
             tokenizer.min_length = max_length
             tokens_dict = defaultdict(list)
             for text in captions:
-                tokens = text_encoder.tokenize(text)
+                tokens = tokenize(text_encoder, text)
                 for k, v in tokens.items():
                     tokens_dict[k].extend(v)
 
@@ -627,9 +636,10 @@ class ComfyPipeline:
             with torch.autocast('cuda', enabled=False):
                 output = output.to(torch.float32)
                 target = target.to(output.device, torch.float32)
-                if 'pseudo_huber_c' in self.config:
-                    c = self.config['pseudo_huber_c']
-                    loss = torch.sqrt((output-target)**2 + c**2) - c
+                if 'huber_delta' in self.config:
+                    loss = F.huber_loss(output, target, reduction='none', delta=self.config['huber_delta'])
+                elif 'smooth_l1_beta' in self.config:
+                    loss = F.smooth_l1_loss(output, target, reduction='none', beta=self.config['smooth_l1_beta'])
                 else:
                     loss = F.mse_loss(output, target, reduction='none')
                 # empty tensor means no masking

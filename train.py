@@ -1,9 +1,6 @@
 import argparse
 import os
 import wandb
-# Disable comfy_kitchen during training to avoid autograd errors
-import sys
-sys.modules["comfy_kitchen"] = None
 from datetime import datetime, timezone
 import shutil
 import glob
@@ -301,7 +298,7 @@ if __name__ == '__main__':
     deepspeed.init_distributed()
 
     # needed for broadcasting Queue in dataset.py
-    torch.cuda.set_device(dist.get_rank())
+    torch.cuda.set_device(local_rank)
 
     resume_from_checkpoint = (
         args.resume_from_checkpoint if args.resume_from_checkpoint is not None
@@ -368,6 +365,9 @@ if __name__ == '__main__':
     elif model_type == 'flux2':
         from models import flux2
         model = flux2.Flux2Pipeline(config)
+    elif model_type == 'ernie_image':
+        from models import ernie_image
+        model = ernie_image.ErnieImagePipeline(config)
     else:
         raise NotImplementedError(f'Model type {model_type} is not implemented')
 
@@ -517,24 +517,26 @@ if __name__ == '__main__':
     else:
         is_adapter = False
 
-    # if this is a new run, create a new dir for it
+    # Determine run_dir on rank 0 and broadcast it
+    run_dir_container = [None]
+    if is_main_process():
+        if resume_from_checkpoint is True:
+            run_dir_container[0] = get_most_recent_run_dir(config['output_dir'])
+        elif isinstance(resume_from_checkpoint, str):
+            run_dir_container[0] = os.path.join(config['output_dir'], resume_from_checkpoint)
+        else:
+            run_dir_container[0] = os.path.join(config['output_dir'], datetime.now(timezone.utc).strftime('%Y%m%d_%H-%M-%S'))
+
+    torch.distributed.broadcast_object_list(run_dir_container, src=0, group=dist.get_world_group())
+    run_dir = run_dir_container[0]
+
+    os.makedirs(run_dir, exist_ok=True)
     if not resume_from_checkpoint and is_main_process():
-        run_dir = os.path.join(config['output_dir'], datetime.now(timezone.utc).strftime('%Y%m%d_%H-%M-%S'))
-        os.makedirs(run_dir, exist_ok=True)
         shutil.copy(args.config, run_dir)
         shutil.copy(config['dataset'], run_dir)
         for eval_dataset in config['eval_datasets']:
             shutil.copy(eval_dataset['config'], run_dir)
-    # wait for all processes then get the most recent dir (may have just been created)
     dist.barrier()
-    if resume_from_checkpoint is True:  # No specific folder provided, use most recent
-        run_dir = get_most_recent_run_dir(config['output_dir'])
-    elif isinstance(resume_from_checkpoint, str):  # Specific folder provided
-        run_dir = os.path.join(config['output_dir'], resume_from_checkpoint)
-        if not os.path.exists(run_dir):
-            raise ValueError(f"Checkpoint directory {run_dir} does not exist")
-    else:  # Not resuming, use most recent (newly created) dir
-        run_dir = get_most_recent_run_dir(config['output_dir'])
 
     # WandB logging
     wandb_enable = config.get('monitoring', {}).get('enable_wandb', False)
@@ -751,10 +753,37 @@ if __name__ == '__main__':
                 pg_other = pg
                 pg_other['params'] = params_other
                 new_param_groups.append(pg_other)
-            return klass(new_param_groups, *args, **kwargs)
+            param_groups = new_param_groups
         else:
             param_groups = model.get_param_groups(model_parameters)
-            return klass(param_groups, *args, **kwargs)
+
+        # split weight decay and no weight decay params
+        new_param_groups = []
+        for pg in param_groups:
+            params_no_wd = []
+            params_wd = []
+            params = pg.pop('params')
+            for p in params:
+                if p.ndim == 1 or p.original_name.startswith('llm_adapter.embed'):
+                    params_no_wd.append(p)
+                else:
+                    params_wd.append(p)
+            pg_no_wd = pg.copy()
+            pg['params'] = params_wd
+            pg_no_wd['params'] = params_no_wd
+            pg_no_wd['weight_decay'] = 0
+            if optim_type_lower == 'genericoptim':
+                # If we aren't using weight decay, don't use Muon either (handles LLM adapter embed properly)
+                pg_no_wd['muon'] = False
+                pg_no_wd['adamuon'] = False
+                pg_no_wd['normuon'] = False
+            if len(params_wd) > 0:
+                new_param_groups.append(pg)
+            if len(params_no_wd) > 0:
+                new_param_groups.append(pg_no_wd)
+        param_groups = new_param_groups
+
+        return klass(param_groups, *args, **kwargs)
 
     model_engine._configure_optimizer(get_optimizer, parameters_to_train)
     optimizer = model_engine.optimizer
@@ -795,6 +824,8 @@ if __name__ == '__main__':
         lr_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
     elif scheduler_type == 'linear':
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.0, total_iters=config['epochs'] * steps_per_epoch)
+    elif scheduler_type == 'cosine':
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] * steps_per_epoch, eta_min=1e-6)
     else:
         raise NotImplementedError(f'Unknown lr_scheduler: {scheduler_type}')
     if config['warmup_steps'] > 0:
